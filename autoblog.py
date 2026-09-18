@@ -17,7 +17,7 @@ from google import genai
 BLOG_ID = "2163955447594716446"
 SCOPES = ["https://www.googleapis.com/auth/blogger"]
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 BLOGGER_TOKEN_JSON = os.environ.get("BLOGGER_TOKEN_JSON")
 
 TOPICS = [
@@ -175,16 +175,28 @@ CONTENT:
 def generate_post(topic, context, today):
     client = genai.Client(api_key=GEMINI_API_KEY)
     prompt = build_prompt(topic, context, today)
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-        config={"temperature": 0.4},
-    )
-    text = (response.text or "").strip()
-    match = re.search(r"TITLE:\s*(.*?)\s*\nCONTENT:\s*(.*)", text, re.S)
-    if not match:
-        return None, None
-    return match.group(1).strip(), match.group(2).strip()
+    models = [GEMINI_MODEL, "gemini-3.1-flash-lite", "gemini-flash-lite-latest"]
+    seen = set()
+    for model in models:
+        if model in seen:
+            continue
+        seen.add(model)
+        for attempt in range(3):
+            try:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config={"temperature": 0.4},
+                )
+                text = (response.text or "").strip()
+                match = re.search(r"TITLE:\s*(.*?)\s*\nCONTENT:\s*(.*)", text, re.S)
+                if match:
+                    return match.group(1).strip(), match.group(2).strip()
+                return None, None
+            except Exception as exc:
+                print(f"[generate] model={model} attempt={attempt} failed: {str(exc)[:100]}")
+                time.sleep(10 * (attempt + 1))
+    return None, None
 
 
 def validate(content_html, results):
