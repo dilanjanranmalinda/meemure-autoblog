@@ -19,47 +19,55 @@ SCOPES = ["https://www.googleapis.com/auth/blogger"]
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 BLOGGER_TOKEN_JSON = os.environ.get("BLOGGER_TOKEN_JSON")
+PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
 
 TOPICS = [
     {
         "title": "Meemure Village News and Latest Updates",
         "query": "Meemure village Sri Lanka news latest",
+        "image": "Meemure Sri Lanka village mountains",
         "label": "News",
         "fresh": True,
     },
     {
         "title": "Kandy News and Events",
         "query": "Kandy city Sri Lanka news today events",
+        "image": "Kandy Sri Lanka temple lake",
         "label": "News",
         "fresh": True,
     },
     {
         "title": "How to Reach Meemure from Kandy",
         "query": "Meemure travel guide how to reach Lakegala Kandy road",
+        "image": "Sri Lanka mountain road travel",
         "label": "Travel",
         "fresh": False,
     },
     {
         "title": "Meemure Weather and the Best Time to Visit",
         "query": "Meemure Knuckles weather rainfall best time to visit",
+        "image": "Sri Lanka rainforest mountains cloud",
         "label": "Travel",
         "fresh": False,
     },
     {
         "title": "Meemure, Lakegala and the Village Culture",
         "query": "Meemure Lakegala legend history culture village",
+        "image": "Sri Lanka misty mountains landscape",
         "label": "Cultural",
         "fresh": False,
     },
     {
         "title": "Kandy District Tourism and Transport Updates",
         "query": "Kandy district Sri Lanka tourism transport update",
+        "image": "Kandy Sri Lanka day",
         "label": "News",
         "fresh": True,
     },
     {
         "title": "Knuckles Mountain Range Hiking and Eco Tourism",
         "query": "Knuckles mountain range hiking eco tourism trail Sri Lanka",
+        "image": "Sri Lanka hiking mountain trail",
         "label": "Travel",
         "fresh": False,
     },
@@ -212,6 +220,46 @@ def validate(content_html, results):
     return matched >= 2
 
 
+def find_image(query, width=1200):
+    if not PEXELS_API_KEY:
+        return None
+    queries = [query, "Sri Lanka landscape", "Sri Lanka mountain"]
+    for q in queries:
+        try:
+            resp = requests.get(
+                "https://api.pexels.com/v1/search",
+                params={"query": q, "per_page": 1, "orientation": "landscape"},
+                headers={"Authorization": PEXELS_API_KEY},
+                timeout=20,
+            )
+            resp.raise_for_status()
+            photos = resp.json().get("photos", [])
+            if not photos:
+                continue
+            src = photos[0].get("src", {})
+            base = src.get("large2x") or src.get("large") or src.get("original")
+            if not base:
+                continue
+            m = re.search(r"(https?://[^?]+)", base)
+            if not m:
+                continue
+            return f"{m.group(1)}?auto=compress&cs=tinysrgb&w={width}"
+        except Exception as exc:
+            print(f"[image] pexels query '{q}' failed: {str(exc)[:80]}")
+    print("[image] no suitable image found - continuing without image")
+    return None
+
+
+def embed_image(content_html, image_url, alt):
+    img_html = (
+        '<div style="text-align:center;margin:10px 0;">'
+        f'<img src="{image_url}" alt="{alt}" loading="lazy" '
+        'style="max-width:100%;height:auto;border-radius:8px;" />'
+        "</div><br/>"
+    )
+    return img_html + content_html
+
+
 def publish_live(title, content_html, label):
     token_data = json.loads(BLOGGER_TOKEN_JSON)
     creds = Credentials.from_authorized_user_info(token_data, SCOPES)
@@ -245,7 +293,7 @@ def main():
 
     custom_topic = os.environ.get("CUSTOM_TOPIC", "").strip()
     if custom_topic:
-        meta = {"title": f"Daily Update: {custom_topic}", "query": custom_topic, "label": "News", "fresh": True}
+        meta = {"title": f"Daily Update: {custom_topic}", "query": custom_topic, "image": custom_topic, "label": "News", "fresh": True}
     else:
         meta = TOPICS[date.today().toordinal() % len(TOPICS)]
 
@@ -274,6 +322,10 @@ def main():
     if not title or not content_html or not validate(content_html, results):
         print("[run] post could not pass factual validation twice - not publishing")
         sys.exit(1)
+
+    image_url = find_image(meta.get("image") or meta["query"])
+    if image_url:
+        content_html = embed_image(content_html, image_url, meta["title"])
 
     publish_live(title, content_html, meta["label"])
 
