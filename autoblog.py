@@ -152,10 +152,7 @@ def build_context(results, max_full=3):
 
 def build_prompt(topic, context, today):
     return f"""
-You are a careful factual writer for "meemurevillage.lk", a Sri Lankan blog about Meemure Village and the Kandy district.
-
-Write a daily blog post on the topic: "{topic}".
-Today's date: {today}.
+You are a natural, experienced Sri Lankan travel and news writer who lives near the village of Meemure. Write a daily blog post on the topic: "{topic}". Today's date: {today}.
 
 STRICT FACTUAL RULES (never break these):
 1. Use ONLY the facts inside the source documents below. Ignore everything you know from training.
@@ -166,12 +163,20 @@ STRICT FACTUAL RULES (never break these):
 6. Never present speculation as fact. Never add warnings, forecasts or advice that are not in the documents.
 7. End the article with an <h3>Sources</h3> section: an unordered list <ul> with ALL the source links used (list item per source: <a href="URL">Title</a>).
 
+WRITING STYLE RULES (never break these):
+1. Write like an experienced human blogger who genuinely knows the Meemure area - never like an AI assistant, a company announcement, or a template.
+2. NEVER mention this website, the blog name "meemurevillage", the word "blog", "article", "daily update" or "AI". Do not welcome the reader; do not say "Welcome to", "In this post", or "Today's post".
+3. Open directly with a natural, interesting hook that pulls the reader in - the actual subject, not an introduction about the post itself.
+4. Use short, warm, human sentences with natural rhythm. Sound like a storyteller, not a robot. Avoid overlapping repetition and avoid phrases like "In conclusion", "It's important to note", "In today's fast-paced world".
+5. Never use the word "delve". Never write self-referential or meta-commentary.
+6. Write a headline that is an appealing, natural title of 6 to 10 words. No quotes, no emojis, no colons, and never prefix it with anything.
+
 SOURCE DOCUMENTS:
 {context}
 
 FORMAT REQUIREMENTS:
 - Reply with exactly two marker lines followed by the article:
-TITLE: <a title of 8 to 12 words, do not use quotes>
+TITLE: <headline>
 CONTENT:
 <article as clean HTML>
 - Use only these HTML tags: <h2>, <h3>, <p>, <ul>, <li>, <strong>, <em>, <a>. No <html>, <head>, <body>, <script> or <style>.
@@ -293,7 +298,7 @@ def main():
 
     custom_topic = os.environ.get("CUSTOM_TOPIC", "").strip()
     if custom_topic:
-        meta = {"title": f"Daily Update: {custom_topic}", "query": custom_topic, "image": custom_topic, "label": "News", "fresh": True}
+        meta = {"title": custom_topic, "query": custom_topic, "image": custom_topic, "label": "News", "fresh": True}
     else:
         meta = TOPICS[date.today().toordinal() % len(TOPICS)]
 
@@ -323,9 +328,11 @@ def main():
         print("[run] post could not pass factual validation twice - not publishing")
         sys.exit(1)
 
-    image_url = find_image(meta.get("image") or meta["query"])
-    if image_url:
-        content_html = embed_image(content_html, image_url, meta["title"])
+    image_url = None
+    if meta.get("label") != "News":
+        image_url = find_image(meta.get("image") or meta["query"])
+        if image_url:
+            content_html = embed_image(content_html, image_url, meta["title"])
 
     publish_live(title, content_html, meta["label"])
 
