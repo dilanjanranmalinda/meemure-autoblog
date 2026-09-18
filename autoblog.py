@@ -227,7 +227,7 @@ def publish_live(title, content_html, label):
         "kind": "blogger#post",
         "title": title,
         "content": content_html,
-        "labels": ["Automated", label],
+        "labels": [label],
     }
     result = service.posts().insert(
         blogId=BLOG_ID, body=body, isDraft=False
