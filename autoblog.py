@@ -1,197 +1,97 @@
 import os
 import re
 import sys
-import html
 import json
 import time
-from urllib.parse import unquote
+import base64
 from datetime import date, datetime
 
-import requests
-from ddgs import DDGS
-import trafilatura
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google import genai
+from google.genai import types
 
 BLOG_ID = "2163955447594716446"
 SCOPES = ["https://www.googleapis.com/auth/blogger"]
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "imagen-3.0-generate-002")
 BLOGGER_TOKEN_JSON = os.environ.get("BLOGGER_TOKEN_JSON")
-PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
 
 TOPICS = [
     {
-        "title": "Meemure Village News and Latest Updates",
-        "query": "Meemure village Sri Lanka news latest",
-        "image": "Meemure Sri Lanka village mountains",
-        "label": "News",
-        "fresh": True,
-    },
-    {
-        "title": "Kandy News and Events",
-        "query": "Kandy city Sri Lanka news today events",
-        "image": "Kandy Sri Lanka temple lake",
-        "label": "News",
-        "fresh": True,
+        "title": "A Morning in Meemure Village",
+        "angle": "the quiet rhythm of village life at dawn, mist on the fields, and everyday moments",
+        "label": "Village Life",
     },
     {
         "title": "How to Reach Meemure from Kandy",
-        "query": "Meemure travel guide how to reach Lakegala Kandy road",
-        "image": "Sri Lanka mountain road travel",
+        "angle": "the journey from Kandy to Meemure, the changing roads, and what travelers should expect",
         "label": "Travel",
-        "fresh": False,
     },
     {
         "title": "Meemure Weather and the Best Time to Visit",
-        "query": "Meemure Knuckles weather rainfall best time to visit",
-        "image": "Sri Lanka rainforest mountains cloud",
+        "angle": "how the seasons feel in Meemure and the Knuckles, and when the village is most welcoming",
         "label": "Travel",
-        "fresh": False,
     },
     {
-        "title": "Meemure, Lakegala and the Village Culture",
-        "query": "Meemure Lakegala legend history culture village",
-        "image": "Sri Lanka misty mountains landscape",
+        "title": "Lakegala and the Spirit of Meemure",
+        "angle": "the presence of Lakegala, local stories, and the cultural heart of the village",
         "label": "Cultural",
-        "fresh": False,
     },
     {
-        "title": "Kandy District Tourism and Transport Updates",
-        "query": "Kandy district Sri Lanka tourism transport update",
-        "image": "Kandy Sri Lanka day",
-        "label": "News",
-        "fresh": True,
-    },
-    {
-        "title": "Knuckles Mountain Range Hiking and Eco Tourism",
-        "query": "Knuckles mountain range hiking eco tourism trail Sri Lanka",
-        "image": "Sri Lanka hiking mountain trail",
+        "title": "Kandy to the Knuckles: A Day Trip Story",
+        "angle": "a personal-feeling day trip from Kandy toward the Knuckles and Meemure",
         "label": "Travel",
-        "fresh": False,
+    },
+    {
+        "title": "Village Food and Simple Traditions in Meemure",
+        "angle": "home-cooked meals, local habits, and the warmth of Meemure traditions",
+        "label": "Cultural",
+    },
+    {
+        "title": "Hiking Around Meemure and the Knuckles Range",
+        "angle": "trails, views, and the feeling of walking through the Knuckles landscape",
+        "label": "Travel",
     },
 ]
 
 
-def search_web(query, max_results=6, fresh=False):
-    results = []
-    try:
-        with DDGS() as ddgs:
-            kwargs = {"max_results": max_results, "region": "lk-en"}
-            if fresh:
-                kwargs["timelimit"] = "w"
-            raw = list(ddgs.text(query, **kwargs))
-            for r in raw:
-                results.append({
-                    "title": r.get("title", "").strip(),
-                    "body": r.get("body", "").strip(),
-                    "href": r.get("href", "").strip(),
-                })
-    except Exception as exc:
-        print(f"[search] ddgs failed ({exc}); using HTML fallback")
-        results = duckduckgo_html(query, max_results)
-    results = [r for r in results if r.get("href")]
-    return results
+def build_prompt(topic, angle, today):
+    return f"""You are a local storyteller writing from Meemure, Sri Lanka. Write a blog post in your own words.
 
+Topic: {topic}
+Angle to explore: {angle}
+Today's date (for context only, do not force it into the text): {today}
 
-def duckduckgo_html(query, max_results=6):
-    results = []
-    try:
-        resp = requests.get(
-            "https://duckduckgo.com/html/",
-            params={"q": query, "kl": "lk-en"},
-            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"},
-            timeout=20,
-        )
-        resp.raise_for_status()
-        page = resp.text
-        anchors = re.findall(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', page, re.S)
-        snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</(?:td|a|div)>', page, re.S)
-        for i, (href, title_html) in enumerate(anchors[:max_results]):
-            title = html.unescape(re.sub(r"<[^>]+>", "", title_html)).strip()
-            body = ""
-            if i < len(snippets):
-                body = html.unescape(re.sub(r"<[^>]+>", "", snippets[i])).strip()
-            m = re.search(r"uddg=([^&]+)", href)
-            if m:
-                href = unquote(m.group(1))
-            results.append({"title": title, "body": body, "href": href})
-    except Exception as exc:
-        print(f"[search] HTML fallback failed: {exc}")
-    return [r for r in results if r.get("href")]
+WRITING STYLE:
+- Sound like a real person sharing lived experience and impressions, not an AI assistant or a brochure.
+- Warm, clear, and natural tone with varied sentence lengths. Human rhythm, not robotic.
+- Open with a vivid hook about the place/experience itself. No "Welcome to", no "In this post", no "Today we will".
+- Never mention "blog", "article", "AI", "as an AI", website names, or meta commentary.
+- Avoid clichés like "hidden gem", "tapestry", "delve", "in conclusion", "it's important to note".
+- Write from a grounded, personal perspective, but do not invent specific statistics, exact prices, precise distances, named officials, or recent news events. Keep details general and experience-based.
 
+CONTENT:
+- Headline: natural and appealing, 6 to 10 words. No quotes, no emojis, no colons.
+- Body: 450 to 700 words with helpful, engaging flow.
+- Use only these HTML tags: <h2>, <h3>, <p>, <ul>, <li>, <strong>, <em>. No links, no <html>/<head>/<body>, no scripts or styles.
+- Structure with 2-3 short <h2> sections where it fits naturally.
 
-def fetch_article_text(url, max_chars=4000):
-    try:
-        downloaded = trafilatura.fetch_url(url)
-        if not downloaded:
-            return None
-        text = trafilatura.extract(
-            downloaded,
-            include_comments=False,
-            include_tables=False,
-            favor_recall=False,
-        )
-        if text:
-            return " ".join(text.split())[:max_chars]
-    except Exception:
-        pass
-    return None
-
-
-def build_context(results, max_full=3):
-    parts = []
-    for i, r in enumerate(results, 1):
-        part = f"Document {i}:\nURL: {r['href']}\nTitle: {r['title']}\nSnippet: {r['body']}"
-        if r.get("full_text"):
-            part += f"\nFull text: {r['full_text']}"
-        parts.append(part)
-    return "\n\n".join(parts)
-
-
-def build_prompt(topic, context, today):
-    return f"""
-You are a natural, experienced Sri Lankan travel and news writer who lives near the village of Meemure. Write a daily blog post on the topic: "{topic}". Today's date: {today}.
-
-STRICT FACTUAL RULES (never break these):
-1. Use ONLY the facts inside the source documents below. Ignore everything you know from training.
-2. Do NOT invent, guess or imply any statistic, date, price, distance, name, person, event or number that is not present in the source documents.
-3. If the sources do not cover a point, do not fill the gap from memory - simply skip that point.
-4. Attribute each fact to a source: after every factual claim add an inline link such as <a href="URL">[Source]</a> pointing to the document that supports it.
-5. If the original article states something as opinion, claim or announcement, write it as "according to <publication name>".
-6. Never present speculation as fact. Never add warnings, forecasts or advice that are not in the documents.
-7. End the article with an <h3>Sources</h3> section: an unordered list <ul> with ALL the source links used (list item per source: <a href="URL">Title</a>).
-
-WRITING STYLE RULES (never break these):
-1. Write like an experienced human blogger who genuinely knows the Meemure area - never like an AI assistant, a company announcement, or a template.
-2. NEVER mention this website, the blog name "meemurevillage", the word "blog", "article", "daily update" or "AI". Do not welcome the reader; do not say "Welcome to", "In this post", or "Today's post".
-3. Open directly with a natural, interesting hook that pulls the reader in - the actual subject, not an introduction about the post itself.
-4. Use short, warm, human sentences with natural rhythm. Sound like a storyteller, not a robot. Avoid overlapping repetition and avoid phrases like "In conclusion", "It's important to note", "In today's fast-paced world".
-5. Never use the word "delve". Never write self-referential or meta-commentary.
-6. Write a headline that is an appealing, natural title of 6 to 10 words. No quotes, no emojis, no colons, and never prefix it with anything.
-
-SOURCE DOCUMENTS:
-{context}
-
-FORMAT REQUIREMENTS:
-- Reply with exactly two marker lines followed by the article:
+Reply in exactly this format:
 TITLE: <headline>
 CONTENT:
-<article as clean HTML>
-- Use only these HTML tags: <h2>, <h3>, <p>, <ul>, <li>, <strong>, <em>, <a>. No <html>, <head>, <body>, <script> or <style>.
-- Length: 400 to 700 words.
-- Do not add any text, notes or explanation outside the TITLE: and CONTENT: markers.
+<article html>
 """
 
 
-def generate_post(topic, context, today):
+def generate_post(topic_meta, today):
     client = genai.Client(api_key=GEMINI_API_KEY)
-    prompt = build_prompt(topic, context, today)
-    models = [GEMINI_MODEL, "gemini-3.1-flash-lite", "gemini-flash-lite-latest"]
+    prompt = build_prompt(topic_meta["title"], topic_meta["angle"], today)
+    models = [GEMINI_MODEL, "gemini-2.0-flash", "gemini-1.5-flash"]
     seen = set()
     for model in models:
-        if model in seen:
+        if not model or model in seen:
             continue
         seen.add(model)
         for attempt in range(3):
@@ -199,68 +99,96 @@ def generate_post(topic, context, today):
                 response = client.models.generate_content(
                     model=model,
                     contents=prompt,
-                    config={"temperature": 0.4},
+                    config={"temperature": 0.8},
                 )
                 text = (response.text or "").strip()
                 match = re.search(r"TITLE:\s*(.*?)\s*\nCONTENT:\s*(.*)", text, re.S)
-                if match:
-                    return match.group(1).strip(), match.group(2).strip()
-                return None, None
+                if not match:
+                    print(f"[generate] model={model} attempt={attempt} bad format")
+                    continue
+                title = match.group(1).strip().strip('"').strip("'")
+                content = match.group(2).strip()
+                if len(re.sub(r"<[^>]+>", "", content)) < 350:
+                    print(f"[generate] model={model} attempt={attempt} content too short")
+                    continue
+                return title, content
             except Exception as exc:
-                print(f"[generate] model={model} attempt={attempt} failed: {str(exc)[:100]}")
-                time.sleep(10 * (attempt + 1))
+                print(f"[generate] model={model} attempt={attempt} failed: {str(exc)[:120]}")
+                time.sleep(5 * (attempt + 1))
     return None, None
 
 
-def validate(content_html, results):
-    if not content_html or len(content_html) < 500:
-        return False
-    source_urls = [r["href"] for r in results if r.get("href")]
-    domains = []
-    for url in source_urls:
-        m = re.search(r"https?://([^/]+)", url)
-        if m:
-            domains.append(m.group(1))
-    matched = sum(1 for d in domains if d in content_html)
-    return matched >= 2
+def generate_image(topic_title, angle):
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    prompt = (
+        f"Photorealistic, high-quality travel photograph illustrating: {topic_title}. "
+        f"Scene details: {angle}. Location feel: Meemure village and Knuckles mountain range, Sri Lanka. "
+        "Natural lighting, vivid but realistic colors, cinematic composition, no text, no watermark, no logos, no people faces in close-up."
+    )
 
-
-def find_image(query, width=1200):
-    if not PEXELS_API_KEY:
-        return None
-    queries = [query, "Sri Lanka landscape", "Sri Lanka mountain"]
-    for q in queries:
+    # Try Imagen image generation models first
+    image_models = [IMAGE_MODEL, "imagen-3.0-generate-002", "imagen-3.0-fast-generate-001"]
+    seen = set()
+    for model in image_models:
+        if not model or model in seen:
+            continue
+        seen.add(model)
         try:
-            resp = requests.get(
-                "https://api.pexels.com/v1/search",
-                params={"query": q, "per_page": 1, "orientation": "landscape"},
-                headers={"Authorization": PEXELS_API_KEY},
-                timeout=20,
+            result = client.models.generate_images(
+                model=model,
+                prompt=prompt,
+                config=types.GenerateImagesConfig(number_of_images=1),
             )
-            resp.raise_for_status()
-            photos = resp.json().get("photos", [])
-            if not photos:
-                continue
-            src = photos[0].get("src", {})
-            base = src.get("large2x") or src.get("large") or src.get("original")
-            if not base:
-                continue
-            m = re.search(r"(https?://[^?]+)", base)
-            if not m:
-                continue
-            return f"{m.group(1)}?auto=compress&cs=tinysrgb&w={width}"
+            if result and getattr(result, "generated_images", None):
+                img = result.generated_images[0]
+                image_obj = getattr(img, "image", None)
+                data = getattr(image_obj, "image_bytes", None) if image_obj else None
+                if not data and image_obj is not None:
+                    b64 = getattr(image_obj, "data", None)
+                    if b64:
+                        data = base64.b64decode(b64) if isinstance(b64, str) else b64
+                if data:
+                    b64out = base64.b64encode(data).decode("ascii")
+                    print(f"[image] generated with {model}")
+                    return f"data:image/png;base64,{b64out}"
         except Exception as exc:
-            print(f"[image] pexels query '{q}' failed: {str(exc)[:80]}")
-    print("[image] no suitable image found - continuing without image")
+            print(f"[image] model={model} failed: {str(exc)[:140]}")
+
+    # Fallback: try Gemini multimodal image generation
+    for model in ["gemini-2.0-flash-preview-image-generation", "gemini-2.0-flash-exp-image-generation"]:
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"]),
+            )
+            for cand in getattr(response, "candidates", []) or []:
+                content = getattr(cand, "content", None)
+                for part in getattr(content, "parts", []) or []:
+                    inline = getattr(part, "inline_data", None)
+                    if inline and getattr(inline, "data", None):
+                        data = inline.data
+                        if isinstance(data, str):
+                            b64out = data
+                        else:
+                            b64out = base64.b64encode(data).decode("ascii")
+                        mime = getattr(inline, "mime_type", None) or "image/png"
+                        print(f"[image] generated with {model}")
+                        return f"data:{mime};base64,{b64out}"
+        except Exception as exc:
+            print(f"[image] model={model} failed: {str(exc)[:140]}")
+
+    print("[image] could not generate AI image")
     return None
 
 
-def embed_image(content_html, image_url, alt):
+def embed_image(content_html, image_src, alt):
+    safe_alt = alt.replace('"', "&quot;")
     img_html = (
-        '<div style="text-align:center;margin:10px 0;">'
-        f'<img src="{image_url}" alt="{alt}" loading="lazy" '
-        'style="max-width:100%;height:auto;border-radius:8px;" />'
-        "</div><br/>"
+        '<div style="text-align:center;margin:10px 0 18px 0;">'
+        f'<img src="{image_src}" alt="{safe_alt}" loading="lazy" '
+        'style="max-width:100%;height:auto;border-radius:10px;" />'
+        "</div>"
     )
     return img_html + content_html
 
@@ -282,9 +210,7 @@ def publish_live(title, content_html, label):
         "content": content_html,
         "labels": [label],
     }
-    result = service.posts().insert(
-        blogId=BLOG_ID, body=body, isDraft=False
-    ).execute()
+    result = service.posts().insert(blogId=BLOG_ID, body=body, isDraft=False).execute()
     print(f"[publish] LIVE post created: {result.get('url')}")
 
 
@@ -298,41 +224,27 @@ def main():
 
     custom_topic = os.environ.get("CUSTOM_TOPIC", "").strip()
     if custom_topic:
-        meta = {"title": custom_topic, "query": custom_topic, "image": custom_topic, "label": "News", "fresh": True}
+        meta = {
+            "title": custom_topic,
+            "angle": f"a personal, grounded perspective on {custom_topic} around Meemure and Kandy, Sri Lanka",
+            "label": "Travel",
+        }
     else:
         meta = TOPICS[date.today().toordinal() % len(TOPICS)]
 
-    print(f"[run] {datetime.now().isoformat()} topic={meta['title']} query={meta['query']}")
-
-    results = search_web(meta["query"], fresh=meta["fresh"])
-    if not results:
-        print("[run] no search results found - skipping today to avoid publishing fake content")
-        sys.exit(0)
-    print(f"[run] {len(results)} search results")
-
-    for r in results[:3]:
-        r["full_text"] = fetch_article_text(r["href"])
-        time.sleep(1)
-
-    context = build_context(results)
     today = date.today().strftime("%B %d, %Y")
+    print(f"[run] {datetime.now().isoformat()} topic={meta['title']}")
 
-    title, content_html = None, None
-    for attempt in (1, 2):
-        title, content_html = generate_post(meta["title"], context, today)
-        if title and content_html and validate(content_html, results):
-            break
-        print(f"[generate] attempt {attempt} failed validation, retrying")
-
-    if not title or not content_html or not validate(content_html, results):
-        print("[run] post could not pass factual validation twice - not publishing")
+    title, content_html = generate_post(meta, today)
+    if not title or not content_html:
+        print("[run] failed to generate article")
         sys.exit(1)
 
-    image_url = None
-    if meta.get("label") != "News":
-        image_url = find_image(meta.get("image") or meta["query"])
-        if image_url:
-            content_html = embed_image(content_html, image_url, meta["title"])
+    image_src = generate_image(meta["title"], meta["angle"])
+    if image_src:
+        content_html = embed_image(content_html, image_src, title)
+    else:
+        print("[run] publishing without image (image generation unavailable)")
 
     publish_live(title, content_html, meta["label"])
 
