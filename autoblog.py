@@ -6,6 +6,7 @@ import time
 import base64
 from datetime import date, datetime
 
+import requests
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google import genai
@@ -17,6 +18,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-3.5-flash-lite"
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL") or "imagen-3.0-generate-002"
 BLOGGER_TOKEN_JSON = os.environ.get("BLOGGER_TOKEN_JSON")
+PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
 
 TOPICS = [
     {
@@ -206,6 +208,35 @@ def generate_image(topic_title, angle):
     return None
 
 
+def find_stock_image(query, width=1200):
+    if not PEXELS_API_KEY:
+        return None
+    queries = [query, "Meemure Sri Lanka mountains", "Sri Lanka landscape"]
+    for q in queries:
+        try:
+            resp = requests.get(
+                "https://api.pexels.com/v1/search",
+                params={"query": q, "per_page": 1, "orientation": "landscape"},
+                headers={"Authorization": PEXELS_API_KEY},
+                timeout=20,
+            )
+            resp.raise_for_status()
+            photos = resp.json().get("photos", [])
+            if not photos:
+                continue
+            src = photos[0].get("src", {})
+            base = src.get("large2x") or src.get("large") or src.get("original")
+            if not base:
+                continue
+            m = re.search(r"(https?://[^?]+)", base)
+            if m:
+                print(f"[image] stock photo found for '{q}'")
+                return f"{m.group(1)}?auto=compress&cs=tinysrgb&w={width}"
+        except Exception as exc:
+            print(f"[image] stock query '{q}' failed: {str(exc)[:100]}")
+    return None
+
+
 def embed_image(content_html, image_src, alt):
     safe_alt = alt.replace('"', "&quot;")
     img_html = (
@@ -265,10 +296,13 @@ def main():
         sys.exit(1)
 
     image_src = generate_image(meta["title"], meta["angle"])
+    if not image_src:
+        print("[run] AI image unavailable - trying stock photo fallback")
+        image_src = find_stock_image(f"{meta['title']} {meta['angle']} Sri Lanka")
     if image_src:
         content_html = embed_image(content_html, image_src, title)
     else:
-        print("[run] publishing without image (image generation unavailable)")
+        print("[run] publishing without image (no image source available)")
 
     publish_live(title, content_html, meta["label"])
 
