@@ -14,8 +14,8 @@ from google.genai import types
 BLOG_ID = "2163955447594716446"
 SCOPES = ["https://www.googleapis.com/auth/blogger"]
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
-IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "imagen-3.0-generate-002")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-3.5-flash-lite"
+IMAGE_MODEL = os.environ.get("IMAGE_MODEL") or "imagen-3.0-generate-002"
 BLOGGER_TOKEN_JSON = os.environ.get("BLOGGER_TOKEN_JSON")
 
 TOPICS = [
@@ -85,10 +85,23 @@ CONTENT:
 """
 
 
+def list_model_names(client):
+    try:
+        return [m.name.replace("models/", "") for m in client.models.list()]
+    except Exception as exc:
+        print(f"[models] could not list models: {str(exc)[:100]}")
+        return []
+
+
 def generate_post(topic_meta, today):
     client = genai.Client(api_key=GEMINI_API_KEY)
     prompt = build_prompt(topic_meta["title"], topic_meta["angle"], today)
-    models = [GEMINI_MODEL, "gemini-2.0-flash", "gemini-1.5-flash"]
+    available = list_model_names(client)
+    candidates = [GEMINI_MODEL, "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-lite-latest"]
+    models = [m for m in candidates if m and (not available or m in available)]
+    if not models:
+        models = [m for m in available if "flash" in m][:3]
+    print(f"[generate] trying models: {models}")
     seen = set()
     for model in models:
         if not model or model in seen:
@@ -126,8 +139,11 @@ def generate_image(topic_title, angle):
         "Natural lighting, vivid but realistic colors, cinematic composition, no text, no watermark, no logos, no people faces in close-up."
     )
 
-    # Try Imagen image generation models first
-    image_models = [IMAGE_MODEL, "imagen-3.0-generate-002", "imagen-3.0-fast-generate-001"]
+    available = list_model_names(client)
+    first_choices = [IMAGE_MODEL, "imagen-3.0-generate-002", "imagen-3.0-fast-generate-001"]
+    image_models = [m for m in first_choices if m and (not available or m in available)]
+    image_models += [m for m in available if "imagen" in m or "image-generation" in m]
+    print(f"[image] trying models: {image_models}")
     seen = set()
     for model in image_models:
         if not model or model in seen:
@@ -154,8 +170,16 @@ def generate_image(topic_title, angle):
         except Exception as exc:
             print(f"[image] model={model} failed: {str(exc)[:140]}")
 
-    # Fallback: try Gemini multimodal image generation
-    for model in ["gemini-2.0-flash-preview-image-generation", "gemini-2.0-flash-exp-image-generation"]:
+    fallback_models = [m for m in available if "image" in m] + [
+        "gemini-2.0-flash-preview-image-generation",
+        "gemini-2.0-flash-exp-image-generation",
+    ]
+    seen = set()
+
+    for model in fallback_models:
+        if not model or model in seen:
+            continue
+        seen.add(model)
         try:
             response = client.models.generate_content(
                 model=model,
