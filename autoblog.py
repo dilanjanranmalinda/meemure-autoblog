@@ -4,9 +4,11 @@ import sys
 import json
 import time
 from datetime import date, datetime
+from io import BytesIO
 from urllib.parse import quote
 
 import requests
+from PIL import Image
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google import genai
@@ -143,7 +145,7 @@ def generate_ai_image(title, angle):
     seed = date.today().toordinal() % 100000
     url = (
         f"{POLLINATIONS_URL}/{quote(prompt, safe='')}"
-        f"?width=1024&height=576&seed={seed}&nologo=true"
+        f"?width=1024&height=576&seed={seed}"
     )
     try:
         response = requests.get(url, timeout=120)
@@ -153,13 +155,19 @@ def generate_ai_image(title, angle):
             and content_type.startswith("image/")
             and len(response.content) > 1000
         ):
-            ext = "png" if "png" in content_type else "jpg"
+            image = Image.open(BytesIO(response.content)).convert("RGB")
+            width, height = image.size
+            patch_width = int(width * 0.30)
+            patch_height = int(height * 0.14)
+            patch = image.crop(
+                (width - patch_width, height - 2 * patch_height, width, height - patch_height)
+            )
+            image.paste(patch, (width - patch_width, height - patch_height))
             slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60]
-            filename = f"{date.today().isoformat()}-{slug}.{ext}"
+            filename = f"{date.today().isoformat()}-{slug}.jpg"
             os.makedirs(IMAGE_DIR, exist_ok=True)
             path = os.path.join(IMAGE_DIR, filename)
-            with open(path, "wb") as handle:
-                handle.write(response.content)
+            image.save(path, "JPEG", quality=90)
             repo = os.environ.get("GITHUB_REPOSITORY") or "dilanjanranmalinda/meemure-autoblog"
             branch = os.environ.get("GITHUB_REF_NAME") or "main"
             hosted_url = f"https://raw.githubusercontent.com/{repo}/{branch}/{IMAGE_DIR}/{filename}"
