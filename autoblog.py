@@ -3,22 +3,22 @@ import re
 import sys
 import json
 import time
-import base64
 from datetime import date, datetime
+from urllib.parse import quote
 
 import requests
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google import genai
-from google.genai import types
 
 BLOG_ID = "2163955447594716446"
 SCOPES = ["https://www.googleapis.com/auth/blogger"]
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-3.5-flash-lite"
-IMAGE_MODEL = os.environ.get("IMAGE_MODEL") or "imagen-3.0-generate-002"
 BLOGGER_TOKEN_JSON = os.environ.get("BLOGGER_TOKEN_JSON")
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
+POLLINATIONS_URL = "https://image.pollinations.ai/prompt"
+IMAGE_DIR = "generated"
 
 TOPICS = [
     {
@@ -133,78 +133,41 @@ def generate_post(topic_meta, today):
     return None, None
 
 
-def generate_image(topic_title, angle):
-    client = genai.Client(api_key=GEMINI_API_KEY)
+def generate_ai_image(title, angle):
     prompt = (
-        f"Photorealistic, high-quality travel photograph illustrating: {topic_title}. "
-        f"Scene details: {angle}. Location feel: Meemure village and Knuckles mountain range, Sri Lanka. "
-        "Natural lighting, vivid but realistic colors, cinematic composition, no text, no watermark, no logos, no people faces in close-up."
+        f"Editorial travel photograph for a story titled '{title}'. "
+        f"Scene: {angle}. Setting: Meemure village and Knuckles mountain range, Sri Lanka. "
+        "Photorealistic, natural light, vivid realistic colors, cinematic landscape composition, "
+        "no text, no watermark, no logos, no captions, no close-up faces."
     )
-
-    available = list_model_names(client)
-    first_choices = [IMAGE_MODEL, "imagen-3.0-generate-002", "imagen-3.0-fast-generate-001"]
-    image_models = [m for m in first_choices if m and (not available or m in available)]
-    image_models += [m for m in available if "imagen" in m or "image-generation" in m]
-    print(f"[image] trying models: {image_models}")
-    seen = set()
-    for model in image_models:
-        if not model or model in seen:
-            continue
-        seen.add(model)
-        try:
-            result = client.models.generate_images(
-                model=model,
-                prompt=prompt,
-                config=types.GenerateImagesConfig(number_of_images=1),
-            )
-            if result and getattr(result, "generated_images", None):
-                img = result.generated_images[0]
-                image_obj = getattr(img, "image", None)
-                data = getattr(image_obj, "image_bytes", None) if image_obj else None
-                if not data and image_obj is not None:
-                    b64 = getattr(image_obj, "data", None)
-                    if b64:
-                        data = base64.b64decode(b64) if isinstance(b64, str) else b64
-                if data:
-                    b64out = base64.b64encode(data).decode("ascii")
-                    print(f"[image] generated with {model}")
-                    return f"data:image/png;base64,{b64out}"
-        except Exception as exc:
-            print(f"[image] model={model} failed: {str(exc)[:140]}")
-
-    fallback_models = [m for m in available if "image" in m] + [
-        "gemini-2.0-flash-preview-image-generation",
-        "gemini-2.0-flash-exp-image-generation",
-    ]
-    seen = set()
-
-    for model in fallback_models:
-        if not model or model in seen:
-            continue
-        seen.add(model)
-        try:
-            response = client.models.generate_content(
-                model=model,
-                contents=prompt,
-                config=types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"]),
-            )
-            for cand in getattr(response, "candidates", []) or []:
-                content = getattr(cand, "content", None)
-                for part in getattr(content, "parts", []) or []:
-                    inline = getattr(part, "inline_data", None)
-                    if inline and getattr(inline, "data", None):
-                        data = inline.data
-                        if isinstance(data, str):
-                            b64out = data
-                        else:
-                            b64out = base64.b64encode(data).decode("ascii")
-                        mime = getattr(inline, "mime_type", None) or "image/png"
-                        print(f"[image] generated with {model}")
-                        return f"data:{mime};base64,{b64out}"
-        except Exception as exc:
-            print(f"[image] model={model} failed: {str(exc)[:140]}")
-
-    print("[image] could not generate AI image")
+    seed = date.today().toordinal() % 100000
+    url = (
+        f"{POLLINATIONS_URL}/{quote(prompt, safe='')}"
+        f"?width=1024&height=576&seed={seed}&nologo=true"
+    )
+    try:
+        response = requests.get(url, timeout=120)
+        content_type = response.headers.get("content-type", "")
+        if (
+            response.status_code == 200
+            and content_type.startswith("image/")
+            and len(response.content) > 1000
+        ):
+            ext = "png" if "png" in content_type else "jpg"
+            slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60]
+            filename = f"{date.today().isoformat()}-{slug}.{ext}"
+            os.makedirs(IMAGE_DIR, exist_ok=True)
+            path = os.path.join(IMAGE_DIR, filename)
+            with open(path, "wb") as handle:
+                handle.write(response.content)
+            repo = os.environ.get("GITHUB_REPOSITORY") or "dilanjanranmalinda/meemure-autoblog"
+            branch = os.environ.get("GITHUB_REF_NAME") or "main"
+            hosted_url = f"https://raw.githubusercontent.com/{repo}/{branch}/{IMAGE_DIR}/{filename}"
+            print(f"[image] Pollinations image saved: {path}")
+            return hosted_url
+        print(f"[image] Pollinations failed: status={response.status_code} type={content_type}")
+    except Exception as exc:
+        print(f"[image] Pollinations failed: {str(exc)[:160]}")
     return None
 
 
@@ -295,7 +258,7 @@ def main():
         print("[run] failed to generate article")
         sys.exit(1)
 
-    image_src = generate_image(meta["title"], meta["angle"])
+    image_src = generate_ai_image(meta["title"], meta["angle"])
     if not image_src:
         print("[run] AI image unavailable - trying stock photo fallback")
         image_src = find_stock_image(f"{meta['title']} {meta['angle']} Sri Lanka")
